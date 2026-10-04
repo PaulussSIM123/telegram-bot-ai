@@ -47,11 +47,12 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
-# Model vision gratis & aktif di OpenRouter
+# Model-model gratis aktif di OpenRouter
 DEFAULT_VISION_MODELS = (
-    "google/gemini-2.0-flash-lite-preview-02-05:free,"
-    "google/gemini-2.0-pro-exp-02-05:free,"
-    "meta-llama/llama-3.2-11b-vision-instruct:free"
+    "google/gemini-2.0-flash-exp:free,"
+    "google/gemini-flash-1.5-8b,"
+    "meta-llama/llama-3.2-11b-vision-instruct:free,"
+    "mistralai/mistral-7b-instruct:free"
 )
 
 MODELS = [
@@ -133,7 +134,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
-    # Penanganan gambar
+    # Penanganan GAMBAR
     if update.message.photo:
         caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
 
@@ -143,25 +144,23 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         base64_image = compress_image(image_bytes)
         image_data_url = f"data:image/jpeg;base64,{base64_image}"
 
-        user_message_payload = {
+        # Rakit riwayat masa lalu (sebagai teks murni) + gambar terbaru
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for item in list(history[chat_id]):
+            messages.append({"role": item["role"], "content": item["content"]})
+
+        messages.append({
             "role": "user",
             "content": [
                 {"type": "text", "text": caption},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": image_data_url},
-                },
+                {"type": "image_url", "image_url": {"url": image_data_url}},
             ],
-        }
+        })
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            user_message_payload,
-        ]
+        # Simpan ke riwayat lokal HANYA sebagai teks murni
+        history[chat_id].append({"role": "user", "content": f"[Pengirim mengirim gambar]: {caption}"})
 
-        history[chat_id].append({"role": "user", "content": f"[Gambar] {caption}"})
-
-    # Penanganan teks biasa
+    # Penanganan TEKS
     else:
         text_input = update.message.text
         history[chat_id].append({"role": "user", "content": text_input})
@@ -178,7 +177,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if history[chat_id]:
             history[chat_id].pop()
         await update.message.reply_text(
-            f"Maaf, AI gagal memproses gambar/pesan. Detail error: {e}"
+            f"Maaf, AI gagal memproses pesan. Detail error: {e}"
         )
         return
 
