@@ -1,9 +1,12 @@
+import base64
+import io
 import logging
 import os
 from collections import defaultdict, deque
 
 import httpx
 from dotenv import load_dotenv
+from PIL import Image
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -44,7 +47,6 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
-# Model default vision di OpenRouter
 DEFAULT_VISION_MODELS = (
     "google/gemini-2.0-flash-exp:free,"
     "google/gemini-2.0-flash-lite-preview-02-05:free,"
@@ -56,6 +58,19 @@ MODELS = [
     for m in os.getenv("OPENROUTER_MODELS", DEFAULT_VISION_MODELS).split(",")
     if m.strip()
 ]
+
+
+def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
+    """Resize dan kompresi gambar agar payload ringan dan cepat diproses OpenRouter."""
+    img = Image.open(io.BytesIO(image_bytes))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    img.thumbnail((max_size, max_size))
+
+    buffered = io.BytesIO()
+    img.save(buffered, format="JPEG", quality=85)
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
 async def ask_ai(messages: list[dict]) -> str:
@@ -117,13 +132,14 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
-    # 1. Menangani Gambar (Foto)
     if update.message.photo:
         caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
 
-        # Ambil Direct URL gambar langsung dari Telegram API CDN
         photo_file = await update.message.photo[-1].get_file()
-        image_url = photo_file.file_path
+        image_bytes = await photo_file.download_as_bytearray()
+
+        base64_image = compress_image(image_bytes)
+        image_url = f"data:image/jpeg;base64,{base64_image}"
 
         user_message_payload = {
             "role": "user",
@@ -143,7 +159,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         history[chat_id].append({"role": "user", "content": f"[Gambar] {caption}"})
 
-    # 2. Menangani Teks Biasa
     else:
         text_input = update.message.text
         history[chat_id].append({"role": "user", "content": text_input})
