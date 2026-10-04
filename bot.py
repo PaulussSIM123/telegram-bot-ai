@@ -29,10 +29,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("Error: TELEGRAM_BOT_TOKEN belum diset di environment variables!")
+    raise ValueError("Error: TELEGRAM_BOT_TOKEN belum diset!")
 
 if not OPENROUTER_API_KEY:
-    raise ValueError("Error: OPENROUTER_API_KEY belum diset di environment variables!")
+    raise ValueError("Error: OPENROUTER_API_KEY belum diset!")
 
 ALLOWED_USERS = set(
     int(uid.strip())
@@ -42,15 +42,15 @@ ALLOWED_USERS = set(
 
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
-    "Kamu adalah asisten AI Hermes yang ramah, sopan, dan sigap membantu.",
+    "Kamu adalah asisten AI yang ramah dan siap membantu menganalisis teks dan gambar.",
 )
 
 history = defaultdict(lambda: deque(maxlen=10))
 
-# Model vision gratis & terbukti aktif di OpenRouter
+# Model vision gratis & aktif di OpenRouter
 DEFAULT_VISION_MODELS = (
-    "google/gemini-2.0-flash-lite-001,"
-    "google/gemini-flash-1.5-8b,"
+    "google/gemini-2.0-flash-lite-preview-02-05:free,"
+    "google/gemini-2.0-pro-exp-02-05:free,"
     "meta-llama/llama-3.2-11b-vision-instruct:free"
 )
 
@@ -62,7 +62,7 @@ MODELS = [
 
 
 def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
-    """Resize dan kompresi gambar agar kompatibel dan ringan saat dikirim ke AI."""
+    """Mengompres gambar dan mengembalikan string base64 JPEG."""
     img = Image.open(io.BytesIO(image_bytes))
     if img.mode != "RGB":
         img = img.convert("RGB")
@@ -85,7 +85,7 @@ async def ask_ai(messages: list[dict]) -> str:
     async with httpx.AsyncClient(timeout=90) as client:
         for model in MODELS:
             try:
-                log.info(f"Mencoba memproses request menggunakan model: {model}")
+                log.info(f"Mengirim request ke model: {model}")
                 r = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers=headers,
@@ -101,9 +101,7 @@ async def ask_ai(messages: list[dict]) -> str:
                 status_code = getattr(
                     getattr(e, "response", None), "status_code", None
                 )
-                log.warning(
-                    "Model %s gagal (status %s): %s", model, status_code, e
-                )
+                log.warning("Model %s gagal (status %s): %s", model, status_code, e)
     raise RuntimeError(f"Semua model gagal: {last_error}")
 
 
@@ -115,7 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return
     await update.message.reply_text(
-        "Halo! Saya asisten AI Hermes. Kirim pesan teks atau gambar untuk dianalisis.\n"
+        "Halo! Saya asisten AI. Kirim teks atau gambar untuk menganalisisnya.\n"
         "/reset untuk menghapus memori percakapan."
     )
 
@@ -135,6 +133,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
+    # Penanganan gambar
     if update.message.photo:
         caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
 
@@ -142,7 +141,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_bytes = await photo_file.download_as_bytearray()
 
         base64_image = compress_image(image_bytes)
-        image_url = f"data:image/jpeg;base64,{base64_image}"
+        image_data_url = f"data:image/jpeg;base64,{base64_image}"
 
         user_message_payload = {
             "role": "user",
@@ -150,7 +149,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {"type": "text", "text": caption},
                 {
                     "type": "image_url",
-                    "image_url": {"url": image_url},
+                    "image_url": {"url": image_data_url},
                 },
             ],
         }
@@ -162,6 +161,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         history[chat_id].append({"role": "user", "content": f"[Gambar] {caption}"})
 
+    # Penanganan teks biasa
     else:
         text_input = update.message.text
         history[chat_id].append({"role": "user", "content": text_input})
@@ -174,7 +174,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         answer = await ask_ai(messages)
     except Exception as e:
-        log.exception("AI error")
+        log.exception("AI Error")
         if history[chat_id]:
             history[chat_id].pop()
         await update.message.reply_text(
@@ -192,7 +192,6 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
-
     app.add_handler(
         MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, chat)
     )
