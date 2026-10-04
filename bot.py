@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 from collections import defaultdict, deque
@@ -44,12 +45,16 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
+# Model multimodal vision gratis di OpenRouter
+DEFAULT_VISION_MODELS = (
+    "google/gemini-2.0-flash-exp:free,"
+    "google/gemini-2.0-flash-lite-preview-02-05:free,"
+    "meta-llama/llama-3.2-11b-vision-instruct:free"
+)
+
 MODELS = [
     m.strip()
-    for m in os.getenv(
-        "OPENROUTER_MODELS",
-        "google/gemini-2.0-flash-lite-001:free,meta-llama/llama-3.3-70b-instruct:free,openrouter/auto",
-    ).split(",")
+    for m in os.getenv("OPENROUTER_MODELS", DEFAULT_VISION_MODELS).split(",")
     if m.strip()
 ]
 
@@ -93,7 +98,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return
     await update.message.reply_text(
-        "Halo! Saya asisten AI Hermes. Kirim pesan apa saja.\n/reset untuk hapus memori percakapan."
+        "Halo! Saya asisten AI Hermes. Kirim pesan teks atau gambar untuk dianalisis.\n"
+        "/reset untuk menghapus memori percakapan."
     )
 
 
@@ -106,27 +112,71 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
-        await update.message.reply_text(
-            "Maaf, kamu tidak punya akses ke bot ini."
-        )
+        await update.message.reply_text("Maaf, kamu tidak punya akses ke bot ini.")
         return
 
     chat_id = update.effective_chat.id
-    history[chat_id].append({"role": "user", "content": update.message.text})
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history[chat_id]]
+    # 1. Menangani jika input berupa FOTO
+    if update.message.photo:
+        caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
+
+        # Ambil foto kualitas tertinggi
+        photo_file = await update.message.photo[-1].get_file()
+        image_bytes = await photo_file.download_as_bytearray()
+
+        # Konversi ke Base64 Data URL
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        image_url = f"data:image/jpeg;base64,{base64_image}"
+
+        # Payload khusus Multimodal/Vision
+        user_message_payload = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": caption},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                },
+            ],
+        }
+
+        # Susun payload pengiriman tanpa dicampur riwayat lama agar tidak konflik
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            user_message_payload,
+        ]
+
+        # Catat ke history internal sebagai teks ringkas
+        history[chat_id].append({"role": "user", "content": f"[Gambar] {caption}"})
+
+    # 2. Menangani jika input berupa TEKS
+    else:
+        text_input = update.message.text
+        history[chat_id].append({"role": "user", "content": text_input})
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *list(history[chat_id]),
+        ]
+
+    # Kirim ke AI
     try:
         answer = await ask_ai(messages)
     except Exception:
         log.exception("AI error")
-        history[chat_id].pop()
+        if history[chat_id]:
+            history[chat_id].pop()
         await update.message.reply_text(
-            "Maaf, AI sedang sibuk atau kena limit. Coba lagi sebentar."
+            "Maaf, AI sedang sibuk atau gagal memproses gambar/pesan. Coba lagi sebentar."
         )
         return
 
+    # Simpan jawaban bot ke history
     history[chat_id].append({"role": "assistant", "content": answer})
+
+    # Kirim balasan ke Telegram (split jika > 4000 karakter)
     for i in range(0, len(answer), 4000):
         await update.message.reply_text(answer[i : i + 4000])
 
@@ -135,7 +185,12 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+
+    # Handler menerima teks dan gambar
+    app.add_handler(
+        MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, chat)
+    )
+
     log.info("Bot berjalan (polling)...")
     app.run_polling(drop_pending_updates=True)
 
