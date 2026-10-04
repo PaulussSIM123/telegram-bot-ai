@@ -47,15 +47,14 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
-# DAFTAR MODEL GRATIS AKTIF DI OPENROUTER (Vision & Text)
-# Mengabaikan os.getenv agar tidak terpengaruh env variable lama di Railway
+# ID Model Gratis Resmi di OpenRouter
 FREE_MODELS = [
-    "google/gemini-2.0-flash-lite-001",
-    "google/gemini-flash-1.5",
+    "google/gemini-2.0-flash-exp:free",
     "meta-llama/llama-3.2-11b-vision-instruct:free",
     "qwen/qwen-2.5-coder-32b-instruct:free",
     "deepseek/deepseek-r1:free",
     "mistralai/mistral-7b-instruct:free",
+    "openrouter/auto",
 ]
 
 
@@ -72,7 +71,7 @@ def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
-async def ask_ai(messages: list[dict]) -> str:
+async def ask_ai(messages: list[dict], has_image: bool = False) -> str:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -80,8 +79,18 @@ async def ask_ai(messages: list[dict]) -> str:
         "X-Title": "Telegram AI Bot",
     }
     last_error = None
+
+    # Filter model jika mengandung gambar
+    models_to_try = FREE_MODELS
+    if has_image:
+        models_to_try = [
+            "google/gemini-2.0-flash-exp:free",
+            "meta-llama/llama-3.2-11b-vision-instruct:free",
+            "openrouter/auto",
+        ]
+
     async with httpx.AsyncClient(timeout=90) as client:
-        for model in FREE_MODELS:
+        for model in models_to_try:
             try:
                 log.info(f"Mencoba request ke OpenRouter model: {model}")
                 r = await client.post(
@@ -139,9 +148,11 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
+    has_image = False
 
     # PERLAKUAN PENGIRIMAN GAMBAR
     if update.message.photo:
+        has_image = True
         caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
 
         photo_file = await update.message.photo[-1].get_file()
@@ -150,12 +161,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         base64_image = compress_image(image_bytes)
         image_data_url = f"data:image/jpeg;base64,{base64_image}"
 
-        # Menyusun pesan teks murni dari riwayat sebelumnya
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         for item in list(history[chat_id]):
             messages.append({"role": item["role"], "content": item["content"]})
 
-        # Menambahkan gambar di pesan terbaru
         messages.append({
             "role": "user",
             "content": [
@@ -164,7 +173,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
         })
 
-        # Simpan riwayat sebagai teks biasa
         history[chat_id].append(
             {"role": "user", "content": f"[Pengirim mengirim gambar]: {caption}"}
         )
@@ -180,7 +188,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
     try:
-        answer = await ask_ai(messages)
+        answer = await ask_ai(messages, has_image=has_image)
     except Exception as e:
         log.exception("AI Error")
         if history[chat_id]:
