@@ -1,4 +1,3 @@
-import base64
 import logging
 import os
 from collections import defaultdict, deque
@@ -45,6 +44,7 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
+# Model default vision di OpenRouter
 DEFAULT_VISION_MODELS = (
     "google/gemini-2.0-flash-exp:free,"
     "google/gemini-2.0-flash-lite-preview-02-05:free,"
@@ -117,14 +117,13 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
+    # 1. Menangani Gambar (Foto)
     if update.message.photo:
         caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
 
+        # Ambil Direct URL gambar langsung dari Telegram API CDN
         photo_file = await update.message.photo[-1].get_file()
-        image_bytes = await photo_file.download_as_bytearray()
-
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
-        image_url = f"data:image/jpeg;base64,{base64_image}"
+        image_url = photo_file.file_path
 
         user_message_payload = {
             "role": "user",
@@ -144,6 +143,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         history[chat_id].append({"role": "user", "content": f"[Gambar] {caption}"})
 
+    # 2. Menangani Teks Biasa
     else:
         text_input = update.message.text
         history[chat_id].append({"role": "user", "content": text_input})
@@ -155,12 +155,12 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         answer = await ask_ai(messages)
-    except Exception:
+    except Exception as e:
         log.exception("AI error")
         if history[chat_id]:
             history[chat_id].pop()
         await update.message.reply_text(
-            "Maaf, AI sedang sibuk atau gagal memproses gambar/pesan. Coba lagi sebentar."
+            f"Maaf, AI gagal memproses gambar/pesan. Detail error: {e}"
         )
         return
 
