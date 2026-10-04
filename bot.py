@@ -45,7 +45,6 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
-# Model multimodal vision gratis di OpenRouter
 DEFAULT_VISION_MODELS = (
     "google/gemini-2.0-flash-exp:free,"
     "google/gemini-2.0-flash-lite-preview-02-05:free,"
@@ -118,19 +117,15 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
-    # 1. Menangani jika input berupa FOTO
     if update.message.photo:
         caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
 
-        # Ambil foto kualitas tertinggi
         photo_file = await update.message.photo[-1].get_file()
         image_bytes = await photo_file.download_as_bytearray()
 
-        # Konversi ke Base64 Data URL
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
         image_url = f"data:image/jpeg;base64,{base64_image}"
 
-        # Payload khusus Multimodal/Vision
         user_message_payload = {
             "role": "user",
             "content": [
@@ -142,16 +137,13 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
         }
 
-        # Susun payload pengiriman tanpa dicampur riwayat lama agar tidak konflik
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             user_message_payload,
         ]
 
-        # Catat ke history internal sebagai teks ringkas
         history[chat_id].append({"role": "user", "content": f"[Gambar] {caption}"})
 
-    # 2. Menangani jika input berupa TEKS
     else:
         text_input = update.message.text
         history[chat_id].append({"role": "user", "content": text_input})
@@ -161,7 +153,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             *list(history[chat_id]),
         ]
 
-    # Kirim ke AI
     try:
         answer = await ask_ai(messages)
     except Exception:
@@ -173,10 +164,8 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Simpan jawaban bot ke history
     history[chat_id].append({"role": "assistant", "content": answer})
 
-    # Kirim balasan ke Telegram (split jika > 4000 karakter)
     for i in range(0, len(answer), 4000):
         await update.message.reply_text(answer[i : i + 4000])
 
@@ -186,7 +175,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
 
-    # Handler menerima teks dan gambar
     app.add_handler(
         MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, chat)
     )
