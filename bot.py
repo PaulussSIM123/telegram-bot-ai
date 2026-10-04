@@ -47,9 +47,10 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
+# Model vision gratis & terbukti aktif di OpenRouter
 DEFAULT_VISION_MODELS = (
-    "google/gemini-2.0-flash-exp:free,"
-    "google/gemini-2.0-flash-lite-preview-02-05:free,"
+    "google/gemini-2.0-flash-lite-001,"
+    "google/gemini-flash-1.5-8b,"
     "meta-llama/llama-3.2-11b-vision-instruct:free"
 )
 
@@ -61,7 +62,7 @@ MODELS = [
 
 
 def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
-    """Resize dan kompresi gambar agar payload ringan dan cepat diproses OpenRouter."""
+    """Resize dan kompresi gambar agar kompatibel dan ringan saat dikirim ke AI."""
     img = Image.open(io.BytesIO(image_bytes))
     if img.mode != "RGB":
         img = img.convert("RGB")
@@ -77,12 +78,14 @@ async def ask_ai(messages: list[dict]) -> str:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://telegram.org",
         "X-Title": "Telegram AI Bot",
     }
     last_error = None
     async with httpx.AsyncClient(timeout=90) as client:
         for model in MODELS:
             try:
+                log.info(f"Mencoba memproses request menggunakan model: {model}")
                 r = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers=headers,
