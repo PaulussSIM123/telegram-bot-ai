@@ -47,18 +47,15 @@ SYSTEM_PROMPT = os.getenv(
 
 history = defaultdict(lambda: deque(maxlen=10))
 
-# Model-model gratis aktif di OpenRouter
-DEFAULT_VISION_MODELS = (
-    "google/gemini-2.0-flash-exp:free,"
-    "google/gemini-flash-1.5-8b,"
-    "meta-llama/llama-3.2-11b-vision-instruct:free,"
-    "mistralai/mistral-7b-instruct:free"
-)
-
-MODELS = [
-    m.strip()
-    for m in os.getenv("OPENROUTER_MODELS", DEFAULT_VISION_MODELS).split(",")
-    if m.strip()
+# DAFTAR MODEL GRATIS AKTIF DI OPENROUTER (Vision & Text)
+# Mengabaikan os.getenv agar tidak terpengaruh env variable lama di Railway
+FREE_MODELS = [
+    "google/gemini-2.0-flash-lite-001",
+    "google/gemini-flash-1.5",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "qwen/qwen-2.5-coder-32b-instruct:free",
+    "deepseek/deepseek-r1:free",
+    "mistralai/mistral-7b-instruct:free",
 ]
 
 
@@ -84,9 +81,9 @@ async def ask_ai(messages: list[dict]) -> str:
     }
     last_error = None
     async with httpx.AsyncClient(timeout=90) as client:
-        for model in MODELS:
+        for model in FREE_MODELS:
             try:
-                log.info(f"Mengirim request ke model: {model}")
+                log.info(f"Mencoba request ke OpenRouter model: {model}")
                 r = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers=headers,
@@ -102,7 +99,16 @@ async def ask_ai(messages: list[dict]) -> str:
                 status_code = getattr(
                     getattr(e, "response", None), "status_code", None
                 )
-                log.warning("Model %s gagal (status %s): %s", model, status_code, e)
+                response_text = getattr(
+                    getattr(e, "response", None), "text", ""
+                )
+                log.warning(
+                    "Model %s gagal (status %s): %s | Body: %s",
+                    model,
+                    status_code,
+                    e,
+                    response_text,
+                )
     raise RuntimeError(f"Semua model gagal: {last_error}")
 
 
@@ -134,7 +140,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
-    # Penanganan GAMBAR
+    # PERLAKUAN PENGIRIMAN GAMBAR
     if update.message.photo:
         caption = update.message.caption or "Jelaskan isi gambar ini secara detail."
 
@@ -144,11 +150,12 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         base64_image = compress_image(image_bytes)
         image_data_url = f"data:image/jpeg;base64,{base64_image}"
 
-        # Rakit riwayat masa lalu (sebagai teks murni) + gambar terbaru
+        # Menyusun pesan teks murni dari riwayat sebelumnya
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         for item in list(history[chat_id]):
             messages.append({"role": item["role"], "content": item["content"]})
 
+        # Menambahkan gambar di pesan terbaru
         messages.append({
             "role": "user",
             "content": [
@@ -157,10 +164,12 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
         })
 
-        # Simpan ke riwayat lokal HANYA sebagai teks murni
-        history[chat_id].append({"role": "user", "content": f"[Pengirim mengirim gambar]: {caption}"})
+        # Simpan riwayat sebagai teks biasa
+        history[chat_id].append(
+            {"role": "user", "content": f"[Pengirim mengirim gambar]: {caption}"}
+        )
 
-    # Penanganan TEKS
+    # PERLAKUAN PENGIRIMAN TEKS
     else:
         text_input = update.message.text
         history[chat_id].append({"role": "user", "content": text_input})
